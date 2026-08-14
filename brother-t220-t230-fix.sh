@@ -389,8 +389,20 @@ detect_ppd() {
         | grep -viE "brother_dcp${lc_other}" \
         | awk '{print $1}')"
 
+    # Normalización: lpinfo -m puede listar el MISMO PPD dos veces bajo rutas
+    # equivalentes (alias LSB de CUPS). Ejemplo real observado en Linux Mint:
+    #   Brother/brother_dcpt220_printer_en.ppd
+    #   lsb/usr/Brother/brother_dcpt220_printer_en.ppd
+    # Ambas entradas apuntan al mismo archivo físico y deben contar como 1.
+    # Regla: se elimina cualquier prefijo "lsb/usr/" y luego se deduplican
+    # las entradas idénticas preservando la primera aparición.
+    local canonical
+    canonical="$(printf '%s\n' "$candidates" \
+        | sed -E 's|^lsb/usr/||' \
+        | awk 'NF && !seen[$0]++')"
+
     local count
-    count="$(printf '%s\n' "$candidates" | sed '/^$/d' | wc -l | tr -d ' ')"
+    count="$(printf '%s\n' "$canonical" | sed '/^$/d' | wc -l | tr -d ' ')"
 
     if [ "$count" -eq 0 ]; then
         printf '[ERROR] No se encontró ningún PPD para %s en lpinfo -m.\n' "$MODEL_FULL"
@@ -401,16 +413,16 @@ detect_ppd() {
     fi
 
     if [ "$count" -gt 1 ]; then
-        printf '[ERROR] Se encontraron %s PPDs candidatos para %s. Se requiere selección explícita.\n' "$count" "$MODEL_FULL"
-        printf 'Candidatos encontrados:\n'
-        printf '%s\n' "$candidates"
+        printf '[ERROR] Se encontraron %s PPDs distintos para %s. Se requiere selección explícita.\n' "$count" "$MODEL_FULL"
+        printf 'Candidatos distintos encontrados (tras normalizar duplicados lógicos):\n'
+        printf '%s\n' "$canonical"
         printf '\nEste script NO selecciona arbitrariamente entre múltiples candidatos.\n'
         printf 'Instale/seleccione manualmente el PPD correcto y vuelva a ejecutar.\n'
         exit 1
     fi
 
-    # Exactamente un candidato claro.
-    PPD="$(printf '%s\n' "$candidates")"
+    # Exactamente un candidato claro (ya sin duplicados lógicos).
+    PPD="$(printf '%s\n' "$canonical")"
     PPD_FOUND=1
     printf '[OK] PPD detectado dinámicamente (único candidato): %s\n' "$PPD"
 }
