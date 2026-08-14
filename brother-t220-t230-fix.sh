@@ -230,18 +230,23 @@ check_ipp_usb() {
 
     if dpkg -l 2>/dev/null | grep -q "^ii.*ipp-usb"; then
         IPPUSB_INSTALLED=1
-        IPPUSB_INITIAL="instalado"
     else
         IPPUSB_INSTALLED=0
-        IPPUSB_INITIAL="no instalado"
     fi
 
     if systemctl is-active --quiet ipp-usb; then
         IPPUSB_ACTIVE=1
-        IPPUSB_INITIAL="$IPPUSB_INITIAL / activo"
     else
         IPPUSB_ACTIVE=0
-        IPPUSB_INITIAL="$IPPUSB_INITIAL / inactivo"
+    fi
+
+    # Estado inicial REAL, registrado como uno de tres valores estables.
+    if [ "$IPPUSB_INSTALLED" -eq 0 ]; then
+        IPPUSB_INITIAL="no instalado"
+    elif [ "$IPPUSB_ACTIVE" -eq 1 ]; then
+        IPPUSB_INITIAL="activo"
+    else
+        IPPUSB_INITIAL="inactivo"
     fi
 
     printf '[INFO] ipp-usb: instalado=%s activo=%s\n' "$IPPUSB_INSTALLED" "$IPPUSB_ACTIVE"
@@ -259,7 +264,7 @@ disable_ipp_usb() {
             IPPUSB_FINAL="no instalado"
         else
             printf '[INFO] ipp-usb instalado pero inactivo. No se enmascara innecesariamente.\n'
-            IPPUSB_FINAL="instalado inactivo (sin cambios)"
+            IPPUSB_FINAL="inactivo"
         fi
         return 0
     fi
@@ -304,7 +309,7 @@ disable_ipp_usb() {
         exit 1
     fi
 
-    IPPUSB_FINAL="inactive (dead) y masked"
+    IPPUSB_FINAL="masked/inactive"
     printf '[OK] ipp-usb detenido y enmascarado (paquete conservado, NO desinstalado).\n'
 }
 
@@ -521,18 +526,29 @@ validate_queue() {
     lpstat -d
     printf '\n'
 
-    # URI final asignada a la cola
+    # URI final asignada a la cola.
+    # Extracción robusta e independiente del idioma: ancla en el nombre de
+    # la cola (Brother_DCP_T220_USB / Brother_DCP_T230_USB), que es fijo y NO
+    # se traduce. NO se depende de "device for" / "dispositivo para".
     local final_uri
     final_uri="$(lpstat -v "$QUEUE_NAME" 2>/dev/null \
-        | sed -n "s/^device for ${QUEUE_NAME}: //p")"
+        | awk -v q="$QUEUE_NAME" '
+            match($0, q ":[ \t]*") {
+                print substr($0, RSTART + RLENGTH)
+            }
+        ')"
     printf 'URI final de la cola: %s\n' "$final_uri"
 
-    if [ "$final_uri" = "$USB_URI" ]; then
-        QUEUE_USED_USB=1
-        printf '[OK] La cola utiliza la URI usb://Brother/%s?serial=...\n' "$MODEL_FULL"
-    else
-        printf '[ERROR] La URI final no coincide con la URI USB directa esperada.\n'
+    # Validación independiente del idioma.
+    if [ -z "$final_uri" ]; then
         QUEUE_USED_USB=0
+        printf '[ERROR] lpstat -v no devolvió ninguna URI para la cola %s.\n' "$QUEUE_NAME"
+    elif printf '%s' "$final_uri" | grep -qE "^usb://Brother/${MODEL_FULL}(\\?|\$|/)"; then
+        QUEUE_USED_USB=1
+        printf '[OK] La URI final de la cola es correcta: %s\n' "$final_uri"
+    else
+        QUEUE_USED_USB=0
+        printf '[ERROR] La URI final no corresponde a usb://Brother/%s...: %s\n' "$MODEL_FULL" "$final_uri"
     fi
 
     if printf '%s' "$final_uri" | grep -q "^implicitclass://"; then
